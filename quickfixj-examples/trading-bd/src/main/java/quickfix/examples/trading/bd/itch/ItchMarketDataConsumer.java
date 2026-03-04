@@ -149,7 +149,7 @@ public class ItchMarketDataConsumer {
         char buySellIndicator = (char) buffer.get();
         int shares = buffer.getInt();
         String stock = readStock(buffer);
-        long price = buffer.getInt() & 0xFFFFFFFFL;
+        long price = buffer.getLong();
 
         AddOrderMessage order = new AddOrderMessage(stockLocate, trackingNumber, timestamp,
                 orderReferenceNumber, buySellIndicator, shares, stock, price);
@@ -213,7 +213,7 @@ public class ItchMarketDataConsumer {
         char buySellIndicator = (char) buffer.get();
         int shares = buffer.getInt();
         String stock = readStock(buffer);
-        long price = buffer.getInt() & 0xFFFFFFFFL;
+        long price = buffer.getLong();
         long matchNumber = buffer.getLong();
 
         TradeMessage trade = new TradeMessage(stockLocate, trackingNumber, timestamp,

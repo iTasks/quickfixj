@@ -138,7 +138,7 @@ public class AddOrderMessage extends ItchMessage {
             stockBytes[i] = ' ';
         }
         buffer.put(stockBytes);
-        buffer.putInt((int) price);
+        buffer.putLong(price);
     }
 
     @Override

@@ -144,7 +144,7 @@ public class TradeMessage extends ItchMessage {
             stockBytes[i] = ' ';
         }
         buffer.put(stockBytes);
-        buffer.putInt((int) price);
+        buffer.putLong(price);
         buffer.putLong(matchNumber);
     }
 
