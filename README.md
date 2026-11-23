@@ -3,6 +3,7 @@ QuickFIX/J
 [![Java CI](https://github.com/quickfix-j/quickfixj/actions/workflows/maven.yml/badge.svg)](https://github.com/quickfix-j/quickfixj/actions/workflows/maven.yml)
 [![CodeQL](https://github.com/quickfix-j/quickfixj/actions/workflows/codeql-analysis.yml/badge.svg)](https://github.com/quickfix-j/quickfixj/actions/workflows/codeql-analysis.yml)
 [![Sonatype Central](https://maven-badges.sml.io/sonatype-central/org.quickfixj/quickfixj-core/badge.svg)](https://maven-badges.sml.io/sonatype-central/org.quickfixj/quickfixj-core)
+[![codecov](https://codecov.io/gh/quickfix-j/quickfixj/graph/badge.svg?token=svUBx8TTzQ)](https://codecov.io/gh/quickfix-j/quickfixj)
 
 This is the official QuickFIX/J project repository.
 
@@ -64,6 +65,15 @@ If the IDE reports some errors after the compilation with `mvnw clean package`, 
 ```
 $ mvnw clean install -Dmaven.javadoc.skip=true -DskipTests -PskipBundlePlugin,minimal-fix-latest
 ```
+
+### IntelliJ IDEA
+
+For IntelliJ IDEA there are additional steps necessary:
+
+1. Open the Maven tool window. Select `quickfixj-messages-all`, all the `quickfixj-messages-fix*` modules, and optionally `quickfixj-orchestration`. Right-click and choose **Ignore Projects**.
+2. Click **Reload All Maven Projects**.
+3. IntelliJ now resolves those dependencies to the jars in `~/.m2`, which `mvn install` already built. It also stops compiling the generated sources, which sometimes leads to an out-of-memory error.
+4. If you change the message generation or dictionaries, run `./mvnw install` again, then reload.
 
 ## configuration options
 

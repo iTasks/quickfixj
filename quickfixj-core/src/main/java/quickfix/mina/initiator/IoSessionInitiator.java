@@ -35,6 +35,7 @@ import quickfix.SessionSettings;
 import quickfix.SystemTime;
 import quickfix.mina.CompositeIoFilterChainBuilder;
 import quickfix.mina.EventHandlingStrategy;
+import quickfix.mina.HostResolutionStrategy;
 import quickfix.mina.NetworkingOptions;
 import quickfix.mina.ProtocolFactory;
 import quickfix.mina.SessionConnector;
@@ -42,6 +43,7 @@ import quickfix.mina.message.FIXProtocolCodecFactory;
 import quickfix.mina.ssl.InitiatorSslFilter;
 import quickfix.mina.ssl.SSLConfig;
 import quickfix.mina.ssl.SSLContextFactory;
+import quickfix.mina.ssl.SSLContextProvider;
 import quickfix.mina.ssl.SSLSupport;
 
 import javax.net.ssl.SSLContext;
@@ -64,13 +66,27 @@ public class IoSessionInitiator {
 
     private Future<?> reconnectFuture;
 
-    public IoSessionInitiator(Session fixSession, SocketAddress[] socketAddresses,
-            SocketAddress localAddress, int connectTimeout, int[] reconnectIntervalInSeconds,
-            ScheduledExecutorService executor, SessionSettings sessionSettings, NetworkingOptions networkingOptions,
-            EventHandlingStrategy eventHandlingStrategy,
+    IoSessionInitiator(Session fixSession, SocketAddress[] socketAddresses,
+            SocketAddress localAddress, HostResolutionStrategy hostResolutionStrategy, int connectTimeout,
+            int[] reconnectIntervalInSeconds, ScheduledExecutorService executor, SessionSettings sessionSettings,
+            NetworkingOptions networkingOptions, EventHandlingStrategy eventHandlingStrategy,
             IoFilterChainBuilder userIoFilterChainBuilder, boolean sslEnabled, SSLConfig sslConfig,
             String proxyType, String proxyVersion, String proxyHost, int proxyPort,
             String proxyUser, String proxyPassword, String proxyDomain, String proxyWorkstation) throws ConfigError {
+        this(fixSession, socketAddresses, localAddress, hostResolutionStrategy, connectTimeout,
+                reconnectIntervalInSeconds, executor, sessionSettings, networkingOptions, eventHandlingStrategy,
+                userIoFilterChainBuilder, sslEnabled, sslConfig, SSLContextFactory::getInstance, proxyType,
+                proxyVersion, proxyHost, proxyPort, proxyUser, proxyPassword, proxyDomain, proxyWorkstation);
+    }
+
+    IoSessionInitiator(Session fixSession, SocketAddress[] socketAddresses,
+            SocketAddress localAddress, HostResolutionStrategy hostResolutionStrategy, int connectTimeout,
+            int[] reconnectIntervalInSeconds, ScheduledExecutorService executor, SessionSettings sessionSettings,
+            NetworkingOptions networkingOptions, EventHandlingStrategy eventHandlingStrategy,
+            IoFilterChainBuilder userIoFilterChainBuilder, boolean sslEnabled, SSLConfig sslConfig,
+            SSLContextProvider sslContextProvider, String proxyType, String proxyVersion, String proxyHost,
+            int proxyPort, String proxyUser, String proxyPassword, String proxyDomain, String proxyWorkstation)
+            throws ConfigError {
         this.executor = executor;
 
         final long connectTimeoutMillis = connectTimeout * 1000L;
@@ -82,8 +98,9 @@ public class IoSessionInitiator {
         try {
             reconnectTask = new ConnectTask(sslEnabled, socketAddresses, localAddress,
                     userIoFilterChainBuilder, fixSession, connectTimeoutMillis, reconnectIntervalInMillis,
-                    sessionSettings, networkingOptions, eventHandlingStrategy, sslConfig,
-                    proxyType, proxyVersion, proxyHost, proxyPort, proxyUser, proxyPassword, proxyDomain, proxyWorkstation, log);
+                    sessionSettings, networkingOptions, eventHandlingStrategy, sslConfig, sslContextProvider,
+                    proxyType, proxyVersion, proxyHost, proxyPort, proxyUser, proxyPassword, proxyDomain,
+                    proxyWorkstation, log, hostResolutionStrategy);
         } catch (GeneralSecurityException e) {
             throw new ConfigError(e);
         }
@@ -104,7 +121,9 @@ public class IoSessionInitiator {
         private final NetworkingOptions networkingOptions;
         private final EventHandlingStrategy eventHandlingStrategy;
         private final SSLConfig sslConfig;
+        private final SSLContextProvider sslContextProvider;
         private final Logger log;
+        private final HostResolutionStrategy hostResolutionStrategy;
 
         private IoSession ioSession;
         private long lastReconnectAttemptTime;
@@ -122,13 +141,13 @@ public class IoSessionInitiator {
         private final String proxyDomain;
         private final String proxyWorkstation;
 
-        public ConnectTask(boolean sslEnabled, SocketAddress[] socketAddresses,
+        ConnectTask(boolean sslEnabled, SocketAddress[] socketAddresses,
                 SocketAddress localAddress, IoFilterChainBuilder userIoFilterChainBuilder,
                 Session fixSession, long connectTimeoutMillis, long[] reconnectIntervalInMillis,
                 SessionSettings sessionSettings, NetworkingOptions networkingOptions, EventHandlingStrategy eventHandlingStrategy, SSLConfig sslConfig,
-                String proxyType, String proxyVersion, String proxyHost,
+                SSLContextProvider sslContextProvider, String proxyType, String proxyVersion, String proxyHost,
                 int proxyPort, String proxyUser, String proxyPassword, String proxyDomain,
-                String proxyWorkstation, Logger log) throws ConfigError, GeneralSecurityException {
+                String proxyWorkstation, Logger log, HostResolutionStrategy hostResolutionStrategy) throws ConfigError, GeneralSecurityException {
             this.sslEnabled = sslEnabled;
             this.socketAddresses = socketAddresses;
             this.localAddress = localAddress;
@@ -140,7 +159,9 @@ public class IoSessionInitiator {
             this.networkingOptions = networkingOptions;
             this.eventHandlingStrategy = eventHandlingStrategy;
             this.sslConfig = sslConfig;
+            this.sslContextProvider = sslContextProvider;
             this.log = log;
+            this.hostResolutionStrategy = hostResolutionStrategy;
 
             this.proxyType = proxyType;
             this.proxyVersion = proxyVersion;
@@ -193,8 +214,11 @@ public class IoSessionInitiator {
 
         private void installSslFilter(CompositeIoFilterChainBuilder ioFilterChainBuilder)
                 throws GeneralSecurityException {
-            final SSLContext sslContext = SSLContextFactory.getInstance(sslConfig);
-            final SslFilter sslFilter = new InitiatorSslFilter(sslContext, getSniHostName(sslConfig));
+            final SSLContext sslContext = sslContextProvider.getSSLContext(sslConfig);
+            if (sslContext == null) {
+                throw new GeneralSecurityException("SSLContextProvider returned null for " + fixSession.getSessionID());
+            }
+            final SslFilter sslFilter = new InitiatorSslFilter(sslContext, getSniHostName(sslConfig), hostResolutionStrategy);
             sslFilter.setEnabledCipherSuites(sslConfig.getEnabledCipherSuites() != null ? sslConfig.getEnabledCipherSuites()
                     : SSLSupport.getDefaultCipherSuites(sslContext));
             sslFilter.setEnabledProtocols(sslConfig.getEnabledProtocols() != null ? sslConfig.getEnabledProtocols()
@@ -294,7 +318,7 @@ public class IoSessionInitiator {
             // Recreate socket address to avoid cached address resolution
             if (socketAddress instanceof InetSocketAddress) {
                 InetSocketAddress inetAddr = (InetSocketAddress) socketAddress;
-                socketAddress = new InetSocketAddress(inetAddr.getHostName(), inetAddr.getPort());
+                socketAddress = new InetSocketAddress(hostResolutionStrategy.getHost(inetAddr), inetAddr.getPort());
                 socketAddresses[nextSocketAddressIndex] = socketAddress;
             }
             nextSocketAddressIndex = (nextSocketAddressIndex + 1) % socketAddresses.length;

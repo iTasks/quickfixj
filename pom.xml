@@ -3,7 +3,7 @@
 
 	<groupId>org.quickfixj</groupId>
 	<artifactId>quickfixj-parent</artifactId>
-	<version>3.0.2-SNAPSHOT</version>
+	<version>3.0.3-SNAPSHOT</version>
 	<packaging>pom</packaging>
 
 	<name>QuickFIX/J Parent</name>
@@ -61,7 +61,7 @@
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 		<project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
 		<jdkLevel>1.8</jdkLevel>
-		<slf4j.version>2.0.18</slf4j.version>
+		<slf4j.version>2.0.20</slf4j.version>
 		<mockito-core.version>4.11.0</mockito-core.version>
 		<hamcrest.version>3.0</hamcrest.version>
 		<junit.jupiter.version>5.14.4</junit.jupiter.version>
@@ -70,9 +70,11 @@
 		<mainClass />
         <maven.version>3.9.12</maven.version>
 		<maven-resources-plugin-version>3.5.0</maven-resources-plugin-version>
-		<maven-compiler-plugin-version>3.15.0</maven-compiler-plugin-version>
-		<maven-jar-plugin-version>3.5.0</maven-jar-plugin-version>
-		<maven-surefire-plugin-version>3.5.6</maven-surefire-plugin-version>
+		<maven-compiler-plugin-version>3.16.0</maven-compiler-plugin-version>
+		<maven-jar-plugin-version>3.5.1</maven-jar-plugin-version>
+		<maven-surefire-plugin-version>3.6.1</maven-surefire-plugin-version>
+		<jacoco-maven-plugin-version>0.8.16</jacoco-maven-plugin-version>
+		<argLine></argLine>
 		<maven-pmd-plugin-version>3.28.0</maven-pmd-plugin-version>
 		<maven-source-plugin-version>3.4.0</maven-source-plugin-version>
 		<maven-javadoc-plugin-version>3.12.0</maven-javadoc-plugin-version>
@@ -80,27 +82,28 @@
 		<maven-assembly-plugin-version>3.8.0</maven-assembly-plugin-version>
 		<maven-bundle-plugin-version>5.1.9</maven-bundle-plugin-version>
 		<maven-gpg-plugin-version>3.2.8</maven-gpg-plugin-version>
-		<maven-deploy-plugin-version>3.1.4</maven-deploy-plugin-version>
+		<maven-deploy-plugin-version>3.2.0</maven-deploy-plugin-version>
 		<nexus-staging-maven-plugin-version>1.7.0</nexus-staging-maven-plugin-version>
-		<build-helper-maven-plugin-version>3.6.1</build-helper-maven-plugin-version>
+		<build-helper-maven-plugin-version>3.8.0</build-helper-maven-plugin-version>
 		<plantuml-maven-plugin-version>1.2</plantuml-maven-plugin-version>
 		<plantuml-version>8059</plantuml-version>
-		<xml-maven-plugin-version>1.2.1</xml-maven-plugin-version>
+		<xml-maven-plugin-version>1.4.0</xml-maven-plugin-version>
 		<fix-orchestra.standard.version>1.5.4</fix-orchestra.standard.version>
 		<fix-orchestra.repository.version>1.7.3</fix-orchestra.repository.version>
 		<docgen.version>1.6.8</docgen.version>
+		<quickfixj-codegenerator.version>3.0.5</quickfixj-codegenerator.version>
 		<jaxb.version>4.0.5</jaxb.version>
-		<apache.mina.version>2.2.7</apache.mina.version>
+		<apache.mina.version>2.2.9</apache.mina.version>
 		<commons.io.version>2.22.0</commons.io.version>
 		<orchestra.file>OrchestraFIXLatest.xml</orchestra.file>
 		<org.quickfixj.orchestra.tools.version>1.0.3</org.quickfixj.orchestra.tools.version>
-		<jaxen.version>2.0.5</jaxen.version>
+		<jaxen.version>2.0.6</jaxen.version>
 		<saxon.version>12.9</saxon.version>
     	<jmh.version>1.37</jmh.version>
     	<jcstress.version>0.16</jcstress.version>
     	<hsqldb.version>1.8.0.10</hsqldb.version>
-		<netty.version>4.2.15.Final</netty.version>
-		<class-pruner-plugin.version>3.0.1</class-pruner-plugin.version>
+		<netty.version>4.2.21.Final</netty.version>
+		<class-pruner-plugin.version>3.0.2</class-pruner-plugin.version>
 	</properties>
 
    <dependencyManagement>
@@ -236,6 +239,9 @@
 					<groupId>org.apache.maven.plugins</groupId>
 					<artifactId>maven-surefire-plugin</artifactId>
 					<version>${maven-surefire-plugin-version}</version>
+					<configuration>
+						<argLine>@{argLine} -Dfile.encoding=${project.build.sourceEncoding}</argLine>
+					</configuration>
 				</plugin>
 				<plugin>
 					<groupId>org.apache.maven.plugins</groupId>
@@ -370,11 +376,11 @@
 				</plugin>
 				<plugin>
 					<artifactId>maven-plugin-plugin</artifactId>
-					<version>3.15.2</version>
+					<version>3.16.0</version>
 				</plugin>
 				<plugin>
 					<artifactId>maven-install-plugin</artifactId>
-					<version>3.1.4</version>
+					<version>3.2.0</version>
 				</plugin>
 				<plugin>
 					<artifactId>maven-clean-plugin</artifactId>
@@ -398,7 +404,7 @@
 				<plugin>
 					<groupId>org.apache.maven.plugins</groupId>
 					<artifactId>maven-enforcer-plugin</artifactId>
-					<version>3.6.3</version>
+					<version>3.7.0</version>
 				</plugin>
 			</plugins>
 		</pluginManagement>
@@ -448,7 +454,27 @@
 					</execution>
 				</executions>
 			</plugin>
-		</plugins>
+			<plugin>
+			<groupId>org.jacoco</groupId>
+			<artifactId>jacoco-maven-plugin</artifactId>
+			<version>${jacoco-maven-plugin-version}</version>
+			<executions>
+				<execution>
+					<id>jacoco-initialize</id>
+					<goals>
+						<goal>prepare-agent</goal>
+					</goals>
+				</execution>
+				<execution>
+					<id>jacoco-site</id>
+					<phase>package</phase>
+					<goals>
+						<goal>report</goal>
+					</goals>
+				</execution>
+			</executions>
+		</plugin>
+	</plugins>
 	</build>
 	<profiles>
 		<profile>

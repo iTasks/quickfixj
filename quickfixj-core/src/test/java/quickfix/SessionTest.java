@@ -52,7 +52,6 @@ import java.time.LocalTime;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.Date;
 import java.util.List;
 import java.util.TimeZone;
@@ -66,9 +65,11 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
-import org.mockito.Mockito;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -85,6 +86,72 @@ public class SessionTest {
     @Before
     public void setUp() {
         SystemTime.setTimeSource(null);
+    }
+
+    @Test
+    public void testBeforeSessionResetWithoutResponder() throws Exception {
+        assertBeforeSessionReset(false, false);
+    }
+
+    @Test
+    public void testBeforeSessionResetBeforeLogon() throws Exception {
+        assertBeforeSessionReset(true, false);
+    }
+
+    @Test
+    public void testBeforeSessionResetWhileLoggedOn() throws Exception {
+        assertBeforeSessionReset(true, true);
+    }
+
+    private void assertBeforeSessionReset(boolean connected, boolean loggedOn) throws Exception {
+        final SessionID sessionID = new SessionID(FixVersions.BEGINSTRING_FIX44, "SENDER", "TARGET");
+        final List<String> messagesBeforeReset = new ArrayList<>();
+        final List<SessionID> resets = new ArrayList<>();
+        final ApplicationExtendedFunctionalAdapter application = new ApplicationExtendedFunctionalAdapter();
+        try (Session session = new SessionFactoryTestSupport.Builder()
+                .setSessionId(sessionID).setApplication(application).setIsInitiator(false).build()) {
+            final UnitTestResponder responder = new UnitTestResponder();
+            if (connected) {
+                session.setResponder(responder);
+            }
+            if (loggedOn) {
+                logonTo(session);
+            }
+            assertEquals(loggedOn, session.isLoggedOn());
+            final MessageStore store = session.getStore();
+            store.set(10, "message available before reset");
+            session.setNextSenderMsgSeqNum(11);
+            application.addOnBeforeSessionResetListener(id -> {
+                resets.add(id);
+                try {
+                    store.get(10, 10, messagesBeforeReset);
+                } catch (IOException e) {
+                    throw new AssertionError(e);
+                }
+            });
+
+            session.reset();
+
+            assertEquals(1, resets.size());
+            assertEquals(sessionID, resets.get(0));
+            assertEquals(1, messagesBeforeReset.size());
+            assertEquals("message available before reset", messagesBeforeReset.get(0));
+            if (loggedOn) {
+                // A connected session must still finish the Logout exchange before resetting.
+                assertEquals(MsgType.LOGOUT, new Message(responder.sentMessageData).getHeader().getString(MsgType.FIELD));
+                final List<String> pending = new ArrayList<>();
+                store.get(10, 10, pending);
+                assertEquals(messagesBeforeReset, pending);
+                logoutFrom(session, store.getNextTargetMsgSeqNum());
+                assertFalse(session.isLoggedOn());
+            }
+            final List<String> remaining = new ArrayList<>();
+            store.get(10, 10, remaining);
+            assertTrue(remaining.isEmpty());
+            assertEquals(1, store.getNextSenderMsgSeqNum());
+            assertEquals(1, store.getNextTargetMsgSeqNum());
+            assertEquals(1, resets.size());
+        }
     }
 
     @Test
@@ -292,6 +359,105 @@ public class SessionTest {
                 .getHeader().getString(MsgType.FIELD));
 
         session.close();
+    }
+
+    @Test
+    public void testTooLowPossDupMessageDiscardNotifiesStateListener() throws Exception {
+        final UnitTestApplication application = new UnitTestApplication();
+        try (Session session = setUpSession(application, false,
+                new UnitTestResponder())) {
+            logonTo(session);
+            session.next(createAppMessage(2));
+
+            assertEquals(3, session.getExpectedTargetNum());
+            assertEquals(1, application.fromAppMessages.size());
+
+            session.addStateListener(new SessionStateListener() {
+                @Override
+                public void onMissedHeartBeat(SessionID sessionID) {
+                }
+            });
+            final SessionStateListener mockStateListener = mock(SessionStateListener.class);
+            session.addStateListener(mockStateListener);
+
+            final Message possDupMessage = createPossDupAppMessage(2);
+            session.next(possDupMessage);
+
+            assertEquals(3, session.getExpectedTargetNum());
+            assertEquals(1, application.fromAppMessages.size());
+
+            final ArgumentCaptor<Message> messageCaptor = ArgumentCaptor.forClass(Message.class);
+            verify(mockStateListener).onPossDupMessageDiscarded(eq(session.getSessionID()),
+                    messageCaptor.capture());
+            assertTrue(possDupMessage == messageCaptor.getValue());
+            verifyNoMoreInteractions(mockStateListener);
+        }
+    }
+
+    @Test
+    public void testExpectedSequencePossDupMessageDiscardNotifiesStateListener()
+            throws Exception {
+        final UnitTestApplication application = new UnitTestApplication();
+        try (Session session = setUpSession(application, false,
+                new UnitTestResponder())) {
+            logonTo(session);
+
+            final SessionStateListener mockStateListener = mock(SessionStateListener.class);
+            session.addStateListener(mockStateListener);
+
+            final Message possDupMessage = createAppMessage(2);
+            possDupMessage.getHeader().setBoolean(PossDupFlag.FIELD, true);
+            session.next(possDupMessage);
+
+            assertEquals(3, session.getExpectedTargetNum());
+            assertNull(application.lastFromAppMessage());
+            assertEquals(Reject.MSGTYPE, application.lastToAdminMessage()
+                    .getHeader().getString(MsgType.FIELD));
+
+            final ArgumentCaptor<Message> messageCaptor = ArgumentCaptor.forClass(Message.class);
+            verify(mockStateListener).onPossDupMessageDiscarded(eq(session.getSessionID()),
+                    messageCaptor.capture());
+            assertTrue(possDupMessage == messageCaptor.getValue());
+            verifyNoMoreInteractions(mockStateListener);
+        }
+    }
+
+    @Test
+    public void testTooLowNonPossDupMessageDoesNotNotifyStateListener() throws Exception {
+        final UnitTestApplication application = new UnitTestApplication();
+        try (Session session = setUpSession(application, false,
+                new UnitTestResponder())) {
+            logonTo(session);
+            session.next(createAppMessage(2));
+
+            final SessionStateListener mockStateListener = mock(SessionStateListener.class);
+            session.addStateListener(mockStateListener);
+
+            processMessage(session, createAppMessage(1));
+
+            verify(mockStateListener, times(0)).onPossDupMessageDiscarded(
+                    any(SessionID.class), any(Message.class));
+        }
+    }
+
+    @Test
+    public void testInSequenceMessageDoesNotNotifyPossDupDiscarded() throws Exception {
+        final UnitTestApplication application = new UnitTestApplication();
+        try (Session session = setUpSession(application, false,
+                new UnitTestResponder())) {
+            logonTo(session);
+
+            final SessionStateListener mockStateListener = mock(SessionStateListener.class);
+            session.addStateListener(mockStateListener);
+
+            session.next(createAppMessage(2));
+
+            assertEquals(3, session.getExpectedTargetNum());
+            assertEquals(1, application.fromAppMessages.size());
+            verify(mockStateListener, times(0)).onPossDupMessageDiscarded(
+                    any(SessionID.class), any(Message.class));
+            verifyNoMoreInteractions(mockStateListener);
+        }
     }
 
     @Test
@@ -1721,6 +1887,58 @@ public class SessionTest {
             session.next(logon);
             assertEquals(applVerID, session.getTargetDefaultApplicationVersionID());
             assertTrue(session.isLoggedOn());
+        }
+    }
+
+    /**
+     * QFJ-1302: The Session's logonSent state should only be set to true
+     * if the Logon message was actually sent, i.e. if the underlying
+     * MessageStore successfully persisted it. Previously, logonSent was
+     * set unconditionally before checking the result of sendRaw().
+     */
+    @Test
+    // QFJ-1302
+    public void testLogonNotMarkedAsSentWhenMessageStorePersistFails() throws Exception {
+        final Application application = new UnitTestApplication();
+        final SessionID sessionID = new SessionID(
+                FixVersions.BEGINSTRING_FIX44, "SENDER", "TARGET");
+
+        final MessageStoreFactory mockMessageStoreFactory = mock(MessageStoreFactory.class);
+        final MessageStore mockMessageStore = mock(MessageStore.class);
+        when(mockMessageStoreFactory.create(sessionID)).thenReturn(mockMessageStore);
+        when(mockMessageStore.getNextSenderMsgSeqNum()).thenReturn(1);
+        when(mockMessageStore.getNextTargetMsgSeqNum()).thenReturn(1);
+        when(mockMessageStore.getCreationTime()).thenReturn(new Date());
+
+        // Simulate the persistence failure described in ticket QFJ-1302
+        doThrow(new IOException("Simulated persist failure"))
+                .when(mockMessageStore).set(anyInt(), anyString());
+
+        final MessageQueueFactory mockMessageQueueFactory = mock(MessageQueueFactory.class);
+        final MessageQueue mockMessageQueue = mock(MessageQueue.class);
+        when(mockMessageQueueFactory.create(sessionID)).thenReturn(mockMessageQueue);
+
+        final LogFactory mockLogFactory = mock(LogFactory.class);
+        final Log mockLog = mock(Log.class);
+        when(mockLogFactory.create(sessionID)).thenReturn(mockLog);
+
+        try (Session session = new Session(application,
+                mockMessageStoreFactory, mockMessageQueueFactory, sessionID, null, null, null, mockLogFactory,
+                new DefaultMessageFactory(), 30, false, 30, UtcTimestampPrecision.MILLIS, true, false,
+                false, false, false, false, true, false, 1.5, null, true,
+                new int[] { 5 }, false, false, false, false, true, false, true, false,
+                null, true, 0, false, false, true, new ArrayList<>(), Session.DEFAULT_HEARTBEAT_TIMEOUT_MULTIPLIER, false)) {
+
+            final UnitTestResponder responder = new UnitTestResponder();
+            session.setResponder(responder);
+
+            session.logon();
+            session.next();
+
+            final SessionState state = getSessionState(session);
+            assertFalse(
+                    "logonSent should remain false when the MessageStore fails to persist the Logon",
+                    state.isLogonSent());
         }
     }
 
